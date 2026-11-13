@@ -1,0 +1,2242 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Roman — сценарии автоматизации на n8n</title>
+<meta name="description" content="Четыре рабочих сценария на n8n: приём заявок с проверкой, контент-конвейер, дедупликация лидов и ежедневная отчётность." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="i18n.js"></script>
+<script src="vendor/gsap.min.js" defer></script>
+<script src="vendor/ScrollTrigger.min.js" defer></script>
+<style>
+  /* ============================================================
+     Токены
+     Палитра — из самого n8n: канва #3a2410, коралловый бренд #a8681f,
+     плюс реальные цвета нод по типам (триггер/код/таблица/логика/ответ).
+     ============================================================ */
+  :root {
+    --paper: #e9e5db;
+    --paper-sunk: #ded8ca;
+    --surface: #f2efe6;
+    --ink: #3a2410;
+    --ink-soft: #6b5439;
+    --ink-faint: #6f5a40;
+    --rule: #c9c2b2;
+    --rule-soft: #dad5c7;
+    --signal: #8a5316;      /* коралловый, пригодный для текста */
+    --signal-mark: #a8681f; /* коралловый брендовый, для графики */
+
+    --node-trigger: #a8681f;
+    --node-code: #a8681f;
+    --node-data: #d9a85e;
+    --node-logic: #c08a3a;
+    --node-output: #3a2410;
+
+    --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+    --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px; --s9: 96px;
+
+    --r0: 0px; --r1: 2px; --r2: 3px;
+
+    --sans: 'IBM Plex Sans', sans-serif;
+    --display: 'Bricolage Grotesque', 'IBM Plex Sans', sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+    --col: 1180px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Лист чертежа: сетка как у канвы n8n */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(58, 36, 16, 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(58, 36, 16, 0.05) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .sheet {
+    position: relative;
+    z-index: 1;
+    max-width: var(--col);
+    margin: 0 auto;
+    padding: 0 var(--s5);
+  }
+
+  /* ================= Шапка ================= */
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 60;
+    background: rgba(233, 229, 219, 0.92);
+    backdrop-filter: blur(14px) saturate(1.2);
+    border-bottom: 1px solid var(--rule);
+  }
+  .nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 62px;
+    gap: var(--s5);
+  }
+  .mark {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 14px;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .mark-square {
+    width: 11px; height: 11px;
+    background: var(--signal-mark);
+    border-radius: var(--r1);
+  }
+  .nav-links { display: flex; gap: var(--s5); font-size: 14.5px; align-items: center; }
+  .nav-counter {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--signal);
+    padding-right: var(--s2);
+    border-right: 1px solid var(--rule);
+    opacity: 0;
+    transition: opacity 300ms ease;
+  }
+  .nav-counter.on { opacity: 1; }
+
+  /* ================= Переключатель языка ================= */
+  /* Размер прежний, но контраст выше: рамка плотнее, активный язык — охра
+     с тёмным текстом, неактивный — тоже читаемый. */
+  .lang {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    padding: 2px;
+    border: 1px solid var(--ink-faint);
+    border-radius: var(--r2);
+    background: var(--paper);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    margin-left: var(--s2);
+  }
+  /* общий элемент, который перетекает из одного состояния в другое */
+  .lang-thumb {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    left: 2px;
+    width: 30px;
+    background: var(--signal-mark);
+    border-radius: 3px;
+    transform-origin: 50% 50%;
+    pointer-events: none;
+    will-change: transform, border-radius;
+    box-shadow: 0 1px 2px rgba(58, 36, 16, 0.28);
+  }
+  .lang-opt {
+    position: relative;
+    z-index: 1;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--ink-soft);
+    background: none;
+    border: 0;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: color 260ms ease;
+  }
+  .lang-opt:hover { color: var(--ink); }
+  .lang-opt.is-on { color: #241505; }
+  .lang-opt:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+  .nav-links a {
+    color: var(--ink-soft);
+    text-decoration: none;
+    padding-bottom: 2px;
+    border-bottom: 1px solid transparent;
+    transition: color 180ms ease, border-color 180ms ease;
+  }
+  .nav-links a:hover, .nav-links a:focus-visible {
+    color: var(--ink);
+    border-bottom-color: var(--signal-mark);
+  }
+  /* индикатор позиции прокрутки */
+  .progress {
+    position: absolute;
+    left: 0; bottom: -1px;
+    height: 2px;
+    width: 100%;
+    transform: scaleX(0);
+    transform-origin: 0 50%;
+    background: var(--signal-mark);
+  }
+
+  /* ================= Герой ================= */
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    gap: var(--s7);
+    align-items: center;
+    padding: var(--s9) 0 var(--s8);
+  }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin-bottom: var(--s4);
+  }
+  .status i {
+    width: 8px; height: 8px;
+    background: var(--signal-mark);
+    border-radius: var(--r1);
+  }
+  .hero h1 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-variation-settings: 'opsz' 96;
+    font-size: clamp(38px, 4.9vw, 60px);
+    line-height: 1.02;
+    letter-spacing: -0.035em;
+    margin: 0 0 var(--s5);
+    max-width: 19ch;
+  }
+  .hero p {
+    margin: 0 0 var(--s6);
+    font-size: 18px;
+    color: var(--ink-soft);
+    max-width: 46ch;
+  }
+  .actions { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: center; }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font: inherit;
+    font-size: 15px;
+    font-weight: 500;
+    padding: 11px 20px;
+    border-radius: var(--r2);
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 180ms ease, color 180ms ease, border-color 180ms ease;
+  }
+  .btn:hover, .btn:focus-visible { background: var(--signal); border-color: var(--signal); }
+  .btn-quiet {
+    background: transparent;
+    color: var(--ink);
+    border-color: var(--rule);
+  }
+  .btn-quiet:hover, .btn-quiet:focus-visible {
+    background: transparent;
+    color: var(--signal);
+    border-color: var(--signal);
+  }
+  .btn svg { width: 15px; height: 15px; }
+
+  /* --------- Канва в герое --------- */
+  .canvas-panel {
+    background: #3a2410;
+    border-radius: var(--r2);
+    padding: var(--s5);
+    position: relative;
+    overflow: hidden;
+  }
+  .canvas-panel::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(233, 229, 219, 0.032) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(233, 229, 219, 0.032) 1px, transparent 1px);
+    background-size: 28px 28px;
+    pointer-events: none;
+  }
+  .canvas-caption {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: rgba(233, 229, 219, 0.5);
+    margin-bottom: var(--s4);
+    padding-bottom: var(--s3);
+    border-bottom: 1px solid rgba(233, 229, 219, 0.14);
+  }
+  .graph { position: relative; width: 100%; height: auto; display: block; }
+  .graph-m { display: none; }
+
+  /* узлы в SVG */
+  .gnode rect {
+    fill: #4a3218;
+    stroke: rgba(233, 229, 219, 0.26);
+    stroke-width: 1;
+  }
+  .gnode text {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    fill: rgba(233, 229, 219, 0.9);
+  }
+  .gnode .swatch { stroke: none; }
+  .gedge {
+    fill: none;
+    stroke: rgba(233, 229, 219, 0.42);
+    stroke-width: 1.4;
+    stroke-linecap: round;
+  }
+  .packet { fill: var(--signal-mark); }
+
+  /* ================= Разделители ================= */
+  .rule {
+    height: 1px;
+    background: var(--rule);
+    transform: scaleX(0);
+    transform-origin: 0 50%;
+    transition: transform 900ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+  .rule.in { transform: scaleX(1); }
+
+  /* ================= Заголовки секций ================= */
+  .section { padding: var(--s8) 0 0; }
+  .section-head {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: var(--s7);
+    align-items: end;
+    padding-bottom: var(--s6);
+  }
+  .section-head h2 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: clamp(28px, 3.6vw, 42px);
+    line-height: 1.08;
+    letter-spacing: -0.03em;
+    margin: 0;
+    max-width: 17ch;
+  }
+  .section-head p {
+    margin: 0;
+    color: var(--ink-soft);
+    font-size: 17px;
+    max-width: 58ch;
+  }
+
+
+  /* ================= Проекты ================= */
+  .projects-wrap { position: relative; padding-left: 46px; }
+  .rail {
+    position: absolute;
+    left: 12px; top: 10px; bottom: 10px;
+    width: 2px;
+    background: var(--rule);
+    border-radius: 1px;
+  }
+  .rail-fill {
+    position: absolute;
+    left: 0; top: 0;
+    width: 100%;
+    height: 0;
+    background: var(--signal-mark);
+    border-radius: 1px;
+  }
+  .projects { display: grid; gap: var(--s8); padding-bottom: var(--s8); }
+  .project { display: grid; gap: var(--s6); position: relative; scroll-margin-top: 250px; }
+  .project::before {
+    content: '';
+    position: absolute;
+    left: -39px; top: 10px;
+    width: 12px; height: 12px;
+    background: var(--paper);
+    border: 2px solid var(--rule);
+    border-radius: 1px;
+    transition: background 420ms ease, border-color 420ms ease;
+  }
+  .project.active::before {
+    background: var(--signal-mark);
+    border-color: var(--signal-mark);
+  }
+  .project-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s5);
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: var(--s3);
+  }
+  .project-title {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s3);
+    flex-wrap: wrap;
+  }
+  .project-title h3 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: clamp(21px, 2.4vw, 27px);
+    letter-spacing: -0.022em;
+    margin: 0;
+    line-height: 1.2;
+  }
+  .project-kind {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--ink-faint);
+    white-space: nowrap;
+  }
+  /* Скриншот схемы появляется мягко: прозрачность и лёгкий масштаб.
+     Никаких клипов и вырезов — рамка сама подрастает на месте. */
+  .shot {
+    position: relative;
+    /* сбрасываем браузерный отступ figure — из-за него схема сжималась */
+    margin: 0;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: var(--r2);
+    overflow: hidden;
+    opacity: 0;
+    transform: scale(0.955);
+    transition:
+      opacity 900ms cubic-bezier(0.22, 0.61, 0.36, 1),
+      transform 900ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    will-change: opacity, transform;
+  }
+  .shot.in {
+    opacity: 1;
+    transform: scale(1);
+  }
+  /* подпись под схемой проявляется вторым слоем, с задержкой */
+  .shot figcaption {
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 520ms ease 280ms, transform 520ms ease 280ms;
+  }
+  .shot.in figcaption {
+    opacity: 1;
+    transform: none;
+  }
+  .shot img { display: block; width: 100%; height: auto; }
+  .shot figcaption {
+    display: flex;
+    gap: var(--s5);
+    flex-wrap: wrap;
+    padding: 10px var(--s4);
+    border-top: 1px solid var(--rule-soft);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    background: var(--paper);
+  }
+  /* подсказка «тапните, чтобы увеличить» — только на телефоне */
+  .shot-hint {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    color: var(--signal);
+  }
+  .shot-hint svg { width: 12px; height: 12px; }
+  .spec {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--s6);
+  }
+  /* линейка над каждым блоком прочерчивается, когда сценарий попадает в кадр */
+  .spec > div { position: relative; padding-top: 16px; }
+  .spec > div::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 2px;
+    background: var(--rule);
+    transform: scaleX(0);
+    transform-origin: 0 50%;
+    transition: transform 760ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+  .project.in .spec > div::before { transform: scaleX(1); }
+  .spec dt {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+    color: var(--ink-faint);
+    margin-bottom: 6px;
+    opacity: 0;
+    transition: opacity 520ms ease;
+  }
+  .spec dd {
+    margin: 0;
+    font-size: 15.5px;
+    color: var(--ink);
+    line-height: 1.55;
+    opacity: 0;
+    transition: opacity 520ms ease;
+  }
+  .project.in .spec dt, .project.in .spec dd { opacity: 1; }
+  .spec dd .val { font-family: var(--mono); color: var(--signal); font-weight: 500; }
+  .nodes { display: flex; flex-wrap: wrap; gap: 6px; }
+  .node-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    border: 1px solid var(--rule);
+    border-radius: var(--r1);
+    padding: 3px 8px 3px 6px;
+    background: var(--surface);
+  }
+  .node-chip i { width: 8px; height: 8px; border-radius: 1px; flex: none; }
+
+
+  /* ================= Полноразмерный просмотр схемы ================= */
+  .lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: #0b0d1c;
+    display: flex;
+    flex-direction: column;
+    animation: lb-in 240ms ease both;
+  }
+  .lightbox[hidden] { display: none; }
+  @keyframes lb-in { from { opacity: 0; } to { opacity: 1; } }
+  .lightbox-scroll {
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    align-items: center;
+    padding: var(--s6) var(--s4);
+    -webkit-overflow-scrolling: touch;
+  }
+  .lightbox-scroll img {
+    max-width: none;
+    width: 1180px;
+    margin: auto;
+    border-radius: var(--r2);
+    border: 1px solid rgba(233, 229, 219, 0.16);
+  }
+  .lightbox-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 2;
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    background: rgba(233, 229, 219, 0.12);
+    border: 1px solid rgba(233, 229, 219, 0.22);
+    border-radius: var(--r2);
+    color: #f2efe6;
+    cursor: pointer;
+  }
+  .lightbox-close svg { width: 18px; height: 18px; }
+  .lightbox-close:focus-visible { outline: 2px solid #dfae6b; outline-offset: 2px; }
+  .lightbox-note {
+    margin: 0;
+    padding: 10px var(--s4);
+    border-top: 1px solid rgba(233, 229, 219, 0.12);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: rgba(233, 229, 219, 0.5);
+    text-align: center;
+  }
+
+  /* ================= Что получает клиент ================= */
+  .gets {
+    border-top: 1px solid var(--rule);
+    padding-top: var(--s4);
+  }
+  .gets-label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+    color: var(--ink-faint);
+    margin-bottom: var(--s3);
+  }
+  .gets ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--s4);
+  }
+  .gets li {
+    position: relative;
+    padding-left: 18px;
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--ink);
+    opacity: 0;
+    transition: opacity 520ms ease;
+  }
+  .gets li::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 7px;
+    width: 7px; height: 7px;
+    background: var(--signal-mark);
+    border-radius: 1px;
+  }
+  .project.in .gets li { opacity: 1; }
+
+  /* ================= Способы передачи ================= */
+  .delivery {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--s7);
+    border-top: 1px solid var(--rule);
+    padding-top: var(--s6);
+  }
+  .delivery-item h4 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 21px;
+    letter-spacing: -0.02em;
+    margin: 0 0 var(--s3);
+  }
+  .delivery-item p { margin: 0; color: var(--ink-soft); max-width: 52ch; }
+
+  /* ================= Цены ================= */
+  .pricing { border-top: 1px solid var(--rule); }
+  .price-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s4);
+    padding: var(--s4) 0;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .price-name { font-size: 16px; color: var(--ink); }
+  .price-value {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-weight: 500;
+    color: var(--signal);
+    white-space: nowrap;
+  }
+
+  /* ================= Вопросы ================= */
+  .faq { border-top: 1px solid var(--rule); }
+  .faq-item { border-bottom: 1px solid var(--rule); }
+  .faq-item summary {
+    list-style: none;
+    cursor: pointer;
+    position: relative;
+    padding: var(--s4) var(--s7) var(--s4) 0;
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 18px;
+    letter-spacing: -0.015em;
+    color: var(--ink);
+  }
+  .faq-item summary::-webkit-details-marker { display: none; }
+  .faq-item summary::after {
+    content: '';
+    position: absolute;
+    right: 10px; top: 50%;
+    width: 9px; height: 9px;
+    border-right: 2px solid var(--ink-soft);
+    border-bottom: 2px solid var(--ink-soft);
+    transform: translateY(-72%) rotate(45deg);
+    transition: transform 260ms ease;
+  }
+  .faq-item[open] summary::after { transform: translateY(-28%) rotate(225deg); }
+  .faq-item summary:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+  .faq-item p {
+    margin: 0 0 var(--s5);
+    color: var(--ink-soft);
+    max-width: 70ch;
+  }
+
+  /* ================= Презентация-схема ================= */
+  /* секция презентации — во всю ширину окна, без полей макета */
+  .deck {
+    position: relative;
+    width: 100vw;
+    margin-left: calc(50% - 50vw);
+    margin-right: calc(50% - 50vw);
+    padding-top: 0;
+  }
+  .deck-stage {
+    height: 100vh;
+    display: grid;
+    place-items: stretch;
+    padding: 0;
+  }
+  /* окно презентации занимает весь экран под верхней панелью */
+  .deck-window {
+    position: relative;
+    width: 100%;
+    height: calc(100vh - 62px);
+    margin-top: 62px;
+    background: #33200d;
+    border: 0;
+    border-radius: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  /* ambient-слой: сетка внутри окна медленно ползёт, окно не выглядит мёртвым */
+  .deck-grid {
+    position: absolute;
+    inset: -60px 0;
+    background-image:
+      linear-gradient(rgba(233, 229, 219, 0.032) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(233, 229, 219, 0.032) 1px, transparent 1px);
+    background-size: 44px 44px;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .deck-chrome, .deck-body, .deck-foot { position: relative; z-index: 1; }
+  .deck-chrome {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px var(--s4);
+    border-bottom: 1px solid rgba(233, 229, 219, 0.12);
+    flex: none;
+  }
+  .deck-chrome i {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: rgba(233, 229, 219, 0.22);
+  }
+  .deck-chrome i:first-child { background: #a8681f; }
+  .deck-chrome span {
+    margin-left: var(--s3);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: rgba(233, 229, 219, 0.45);
+  }
+  .deck-body {
+    flex: 1;
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    align-items: center;
+    gap: var(--s6);
+    padding: var(--s6) var(--s7) var(--s6) var(--s8);
+    min-height: 0;
+  }
+  .deck-copy {
+    position: relative;
+    min-height: 260px;
+    overflow: hidden;
+  }
+  .deck-slide-copy {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* кадр выдвигается из маски, а не проявляется поверх другого */
+  .deck-slide-in { height: 100%; }
+  .deck-step {
+    display: block;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: #dfae6b;
+    margin-bottom: var(--s3);
+  }
+  .deck-copy h3 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-variation-settings: 'opsz' 96;
+    font-size: clamp(28px, 3.2vw, 42px);
+    line-height: 1.06;
+    letter-spacing: -0.03em;
+    margin: 0 0 var(--s4);
+    color: #f2efe6;
+  }
+  .deck-copy p {
+    margin: 0;
+    font-size: 17px;
+    line-height: 1.6;
+    color: rgba(233, 229, 219, 0.72);
+    max-width: 42ch;
+  }
+  .deck-map {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+  }
+  .deck-map svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    overflow: visible;
+  }
+  .dnode rect {
+    fill: #45301a;
+    stroke: rgba(233, 229, 219, 0.22);
+    stroke-width: 1;
+  }
+  .dnode text {
+    font-family: var(--mono);
+    font-size: 11px;
+    fill: rgba(233, 229, 219, 0.9);
+  }
+  .dnode .sw { stroke: none; }
+  .dedge {
+    fill: none;
+    stroke: rgba(233, 229, 219, 0.34);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+  }
+  .dpacket { fill: #dfae6b; }
+  .deck-foot {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--s4);
+    padding: 12px var(--s5);
+    border-top: 1px solid rgba(233, 229, 219, 0.12);
+  }
+  .deck-count {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: rgba(233, 229, 219, 0.55);
+    flex: none;
+  }
+  .deck-count b { color: #dfae6b; font-weight: 500; }
+  .deck-bar {
+    flex: 1;
+    height: 2px;
+    background: rgba(233, 229, 219, 0.16);
+    border-radius: 1px;
+    overflow: hidden;
+  }
+  .deck-bar-fill {
+    display: block;
+    height: 100%;
+    width: 100%;
+    background: #dfae6b;
+    transform: scaleX(0);
+    transform-origin: 0 50%;
+  }
+
+  /* ================= Как это сделано ================= */
+  .how { padding-bottom: var(--s8); }
+  .how-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: var(--r2);
+    overflow: hidden;
+  }
+  .how-cell {
+    background: var(--paper);
+    padding: var(--s6) var(--s5);
+    opacity: 0;
+    transition: opacity 560ms ease;
+  }
+  .how-cell.in { opacity: 1; }
+  .how-cell h4 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 18px;
+    margin: 0 0 var(--s2);
+    letter-spacing: -0.015em;
+  }
+  .how-cell p { margin: 0; color: var(--ink-soft); font-size: 15px; }
+  .how-cell .step {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--signal);
+    margin-bottom: var(--s3);
+    display: block;
+  }
+
+  /* ================= Контакт ================= */
+  .contact {
+    border-top: 1px solid var(--rule);
+    padding: var(--s8) 0 var(--s9);
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    gap: var(--s7);
+    align-items: start;
+  }
+  .contact h2 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: clamp(28px, 3.6vw, 44px);
+    line-height: 1.06;
+    letter-spacing: -0.03em;
+    margin: 0 0 var(--s4);
+    max-width: 16ch;
+  }
+  .contact p { margin: 0 0 var(--s5); color: var(--ink-soft); font-size: 17px; max-width: 52ch; }
+  .contact-aside {
+    border-left: 1px solid var(--rule);
+    padding-left: var(--s6);
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--ink-soft);
+    display: grid;
+    gap: var(--s3);
+  }
+  .contact-aside a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--signal-mark); }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding: var(--s5) 0 var(--s7);
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--ink-faint);
+    display: flex;
+    justify-content: space-between;
+    gap: var(--s4);
+    flex-wrap: wrap;
+  }
+
+  a:focus-visible, .btn:focus-visible {
+    outline: 2px solid var(--signal);
+    outline-offset: 3px;
+  }
+
+  @media (max-width: 1000px) {
+    .hero { grid-template-columns: 1fr; gap: var(--s6); padding: var(--s7) 0 var(--s7); }
+    .section-head { grid-template-columns: 1fr; gap: var(--s4); align-items: start; }
+    .spec { grid-template-columns: 1fr; gap: var(--s5); }
+    .gets ul { grid-template-columns: 1fr; gap: var(--s2); }
+    .how-grid { grid-template-columns: 1fr; }
+    .delivery { grid-template-columns: 1fr; gap: var(--s5); }
+    .contact { grid-template-columns: 1fr; }
+    .contact-aside { border-left: none; padding-left: 0; border-top: 1px solid var(--rule); padding-top: var(--s4); }
+    .nav-links { display: flex; gap: var(--s4); font-size: 13.5px; }
+    .nav-counter { display: none; }
+    .price-row { flex-direction: column; gap: var(--s2); }
+    .price-value { margin-left: 0; }
+    .shot figcaption { gap: var(--s3) var(--s4); font-size: 11px; }
+    /* схема n8n широкая: на телефоне показываем её целиком (обзор),
+       а тап открывает полноразмерную версию с панорамированием */
+    .shot { cursor: zoom-in; }
+    .shot-hint { display: flex; }
+    .projects-wrap { padding-left: 30px; }
+    .rail { left: 8px; }
+    .project::before { left: -27px; width: 10px; height: 10px; }
+  }
+
+  /* ================= Телефон: своя композиция ================= */
+  @media (max-width: 640px) {
+    /* в шапке остаются только имя и переключатель языка */
+    .nav-links > a { display: none; }
+    .lang { margin-left: 0; padding: 3px; }
+    .lang-opt { padding: 7px 10px; font-size: 12px; }
+
+    /* горизонтальная схема нечитаема — показываем вертикальную */
+    .graph { display: none; }
+    .graph-m { display: block; max-width: 290px; margin: 0 auto; }
+
+    /* панель схемы становится полосой во всю ширину экрана */
+    .canvas-panel {
+      margin: 0 calc(-1 * var(--s5));
+      padding: var(--s4) var(--s5) var(--s5);
+      border-radius: 0;
+      border-left: 0;
+      border-right: 0;
+      border-top: 0;
+    }
+    .canvas-panel::before { inset: 0; background-size: 26px 26px; }
+    .canvas-caption { padding-bottom: var(--s2); margin-bottom: var(--s3); }
+
+    /* заголовок героя на телефоне — крупнее и плотнее */
+    .hero { padding: var(--s6) 0 var(--s6); gap: var(--s5); }
+    .hero h1 { font-size: clamp(32px, 9vw, 42px); line-height: 1.04; margin-bottom: var(--s4); }
+    .hero p { font-size: 16.5px; line-height: 1.58; margin-bottom: var(--s5); }
+    .actions { gap: 10px; }
+    .btn { flex: 1 1 auto; justify-content: center; padding: 13px 18px; }
+
+    /* полоса-разделитель короче */
+    .rule { margin: 0 calc(-1 * var(--s5)); }
+
+    /* секции: воздух меньше, но ритм сохраняется */
+    .section { padding-top: var(--s7); }
+    .section-head { gap: var(--s3); margin-bottom: var(--s5); }
+    .section-head h2 { font-size: 27px; }
+    .section-head p { font-size: 15.5px; }
+
+    /* описание задачи — списком с линейками вместо трёх колонок */
+    .spec { grid-template-columns: 1fr; gap: 0; }
+    .spec > div { padding: var(--s4) 0; border-top: 1px solid var(--rule-soft); }
+    .spec > div:first-child { border-top: 0; padding-top: 0; }
+    .spec dt { margin-bottom: 4px; }
+    .spec dd { font-size: 15px; }
+
+    /* пункты «что получает клиент» — с номером, а не буллетом */
+    .gets { padding-top: var(--s3); }
+    .gets ul { grid-template-columns: 1fr; gap: 10px; }
+    .gets li { padding-left: 24px; font-size: 15px; }
+
+    /* подпись под скриншотом — компактнее, без длинных названий таблиц */
+    .shot figcaption { gap: 6px var(--s3); font-size: 10.5px; padding: 9px var(--s3); }
+    .shot { transition-duration: 620ms; }
+    .shot figcaption { transition-delay: 180ms; transition-duration: 380ms; }
+    .shot figcaption > span:nth-child(3) { display: none; }
+
+    /* презентация на телефоне — полноэкранный покадровый режим */
+    .deck { padding-top: 0; }
+    .deck-stage { height: 100svh; padding: 0; }
+    .deck-window { height: calc(100svh - 56px); margin-top: 56px; }
+    .deck-body { grid-template-columns: 1fr; padding: var(--s6) var(--s5); align-content: center; }
+    .deck-map { display: none; }
+    /* кадры лежат абсолютно — им нужна реальная высота блока,
+       а текст внутри центрируется по вертикали */
+    .deck-copy { min-height: 54vh; }
+    .deck-slide-in { display: flex; flex-direction: column; justify-content: center; height: 100%; }
+    .deck-copy h3 { font-size: clamp(30px, 8.5vw, 38px); line-height: 1.06; margin-bottom: var(--s4); }
+    .deck-copy p { font-size: 16px; line-height: 1.6; }
+    .deck-step { font-size: 11.5px; margin-bottom: var(--s2); }
+    .deck-chrome { padding: 10px var(--s4); }
+    .deck-foot { padding: 12px var(--s4); }
+
+    /* способы передачи — в столбик с линейкой */
+    .delivery { grid-template-columns: 1fr; gap: var(--s5); padding-top: var(--s5); }
+    .delivery-item { padding-bottom: var(--s4); border-bottom: 1px solid var(--rule-soft); }
+    .delivery-item:last-child { border-bottom: 0; padding-bottom: 0; }
+    .delivery-item h4 { font-size: 19px; }
+    .delivery-item p { font-size: 15px; }
+
+    /* цены: название сверху, цена под ним — крупно */
+    .price-row { flex-direction: column; gap: 4px; padding: var(--s4) 0; }
+    .price-name { font-size: 15.5px; }
+    .price-value { margin-left: 0; font-size: 16px; }
+
+    /* вопросы крупнее — пальцем удобнее */
+    .faq-item summary { font-size: 17px; padding: var(--s4) var(--s6) var(--s4) 0; }
+    .faq-item p { font-size: 15px; margin-bottom: var(--s4); }
+
+    /* контакт */
+    .contact { padding-top: var(--s7); gap: var(--s5); }
+    .contact h2 { font-size: 28px; }
+    .contact p { font-size: 16px; }
+    .contact-aside { font-size: 12.5px; }
+
+    footer { font-size: 12px; gap: var(--s2); padding-bottom: var(--s6); }
+  }
+
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+    .shot { opacity: 1; transform: none; }
+    .rule { transform: scaleX(1); }
+  }
+</style>
+</head>
+<body>
+
+<!-- Полноразмерный просмотр схемы на телефоне -->
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Схема сценария" hidden>
+  <button class="lightbox-close" id="lightbox-close" type="button" aria-label="Закрыть">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+  <div class="lightbox-scroll" id="lightbox-scroll">
+    <img id="lightbox-img" alt="" />
+  </div>
+  <p class="lightbox-note">Проведите пальцем, чтобы рассмотреть схему</p>
+</div>
+
+<header>
+  <div class="sheet nav">
+    <div class="mark"><span class="mark-square" aria-hidden="true"></span>roman.dev</div>
+    <nav class="nav-links" aria-label="Разделы страницы">
+      <span class="nav-counter" id="nav-counter" aria-live="off"></span>
+      <a href="#projects" data-i18n="nav.projects">Сценарии</a>
+      <a href="#how" data-i18n="nav.how">Как сделано</a>
+      <a href="#contact" data-i18n="nav.contact">Контакт</a>
+      <div class="lang" id="lang" role="group" aria-label="Язык страницы">
+        <span class="lang-thumb" id="lang-thumb" aria-hidden="true"></span>
+        <button type="button" class="lang-opt is-on" data-lang="ru" aria-pressed="true">RU</button>
+        <button type="button" class="lang-opt" data-lang="en" aria-pressed="false">EN</button>
+      </div>
+    </nav>
+  </div>
+  <div class="progress" id="progress" aria-hidden="true"></div>
+</header>
+
+<main class="sheet">
+
+  <!-- ================= ГЕРОЙ ================= -->
+  <div class="hero">
+    <div>
+      <span class="status" data-i18n="hero.status"><i aria-hidden="true"></i> готов взять задачу на автоматизацию</span>
+      <h1 data-i18n="hero.title">Заявки с сайта больше не теряются по дороге</h1>
+      <p data-i18n="hero.sub">
+        Я настраиваю так, чтобы заявки, посты и утренние сводки делались сами.
+        Работаю один, беру небольшие задачи, цену называю до начала работы.
+      </p>
+      <div class="actions">
+        <a class="btn" href="#contact" data-i18n="hero.cta1">Обсудить мою задачу</a>
+        <a class="btn btn-quiet" href="#pricing" data-i18n="hero.cta2">Посмотреть цены</a>
+      </div>
+    </div>
+
+    <div class="canvas-panel">
+      <div class="canvas-caption">
+        <span data-i18n="hero.caption">приём заявок с сайта</span>
+        <span id="graph-state" data-i18n="hero.graphDrawing">рисуется</span>
+      </div>
+      <svg class="graph" id="hero-graph" viewBox="2 40 464 216" role="img" aria-label="Схема: заявка с сайта, проверка данных, условие, запись в таблицу и ответ клиенту">
+        <defs>
+          <path id="p1" d="M104,148 L136,148" />
+          <path id="p2" d="M224,148 L256,148" />
+          <path id="p3" d="M324,148 C344,148 342,76 356,76" />
+          <path id="p4" d="M324,148 C344,148 342,220 356,220" />
+        </defs>
+
+        <g id="edges">
+          <use href="#p1" class="gedge" id="e1" pathLength="1" />
+          <use href="#p2" class="gedge" id="e2" pathLength="1" />
+          <use href="#p3" class="gedge" id="e3" pathLength="1" />
+          <use href="#p4" class="gedge" id="e4" pathLength="1" />
+        </g>
+
+        <!-- пакет рисуется ДО нод: уходя в узел, он прячется за его корпусом -->
+        <circle class="packet" id="packet" r="4.5" cx="0" cy="0" opacity="0" />
+
+        <g class="gnode" id="n1" transform="translate(16,126)">
+          <rect width="88" height="44" rx="3" /><rect class="swatch" x="14" y="17" width="10" height="10" fill="#7a4a14" />
+          <text x="32" y="26" data-i18n="node.site">Сайт</text>
+        </g>
+        <g class="gnode" id="n2" transform="translate(136,126)">
+          <rect width="88" height="44" rx="3" /><rect class="swatch" x="14" y="17" width="10" height="10" fill="#a8681f" />
+          <text x="32" y="26" data-i18n="node.check">Проверка</text>
+        </g>
+        <g class="gnode" id="n3" transform="translate(256,126)">
+          <rect width="68" height="44" rx="3" /><rect class="swatch" x="13" y="17" width="10" height="10" fill="#c08a3a" />
+          <text x="30" y="26" data-i18n="node.valid">Всё</text>
+        </g>
+        <g class="gnode" id="n4" transform="translate(356,54)">
+          <rect width="96" height="44" rx="3" /><rect class="swatch" x="14" y="17" width="10" height="10" fill="#d9a85e" />
+          <text x="32" y="26" data-i18n="node.table">Таблица</text>
+        </g>
+        <g class="gnode" id="n5" transform="translate(356,198)">
+          <rect width="96" height="44" rx="3" /><rect class="swatch" x="14" y="17" width="10" height="10" fill="#e0a85c" />
+          <text x="32" y="26" data-i18n="node.customer">Клиенту</text>
+        </g>
+
+      </svg>
+        <!-- мобильная схема: вертикальная цепочка, горизонтальная на телефоне нечитаема -->
+        <svg class="graph graph-m" id="hero-graph-m" viewBox="0 0 260 286" role="img" aria-label="Схема: заявка с сайта, проверка данных, условие, запись в таблицу и ответ клиенту">
+          <g id="medges">
+            <path id="mp1" class="gedge" pathLength="1" d="M65,56 L65,86" />
+            <path id="mp2" class="gedge" pathLength="1" d="M65,126 L65,156" />
+            <path id="mp3" class="gedge" pathLength="1" d="M120,166 C140,166 132,196 150,196" />
+            <path id="mp4" class="gedge" pathLength="1" d="M200,216 L200,236" />
+          </g>
+
+          <circle class="packet" id="packet-m" r="4.5" cx="0" cy="0" opacity="0" />
+
+          <g class="gnode" id="mn1" transform="translate(10,16)">
+            <rect width="110" height="40" rx="3" /><rect class="swatch" x="13" y="15" width="10" height="10" fill="#7a4a14" />
+            <text x="31" y="25" data-i18n="node.site">Сайт</text>
+          </g>
+          <g class="gnode" id="mn2" transform="translate(10,86)">
+            <rect width="110" height="40" rx="3" /><rect class="swatch" x="13" y="15" width="10" height="10" fill="#a8681f" />
+            <text x="31" y="25" data-i18n="node.check">Проверка</text>
+          </g>
+          <g class="gnode" id="mn3" transform="translate(10,156)">
+            <rect width="110" height="40" rx="3" /><rect class="swatch" x="13" y="15" width="10" height="10" fill="#c08a3a" />
+            <text x="31" y="25" data-i18n="node.valid">Всё</text>
+          </g>
+          <g class="gnode" id="mn4" transform="translate(150,176)">
+            <rect width="100" height="40" rx="3" /><rect class="swatch" x="13" y="15" width="10" height="10" fill="#d9a85e" />
+            <text x="31" y="25" data-i18n="node.table">Таблица</text>
+          </g>
+          <g class="gnode" id="mn5" transform="translate(150,236)">
+            <rect width="100" height="40" rx="3" /><rect class="swatch" x="13" y="15" width="10" height="10" fill="#e0a85c" />
+            <text x="31" y="25" data-i18n="node.customer">Клиенту</text>
+          </g>
+        </svg>
+
+    </div>
+  </div>
+
+  <div class="rule" data-rule></div>
+
+  <!-- ================= ЗАДАЧИ ================= -->
+  <section class="section" id="projects">
+    <div class="section-head">
+      <h2 data-i18n="jobs.title">Четыре задачи, которые я уже решил</h2>
+      <p data-i18n="jobs.text">
+        Ниже — четыре задачи с моего сервера. У каждой есть схема, реальные запуски
+        и проверка на тестовых данных: так видно, что решение работает, а не нарисовано.
+      </p>
+    </div>
+    <div class="projects-wrap" id="projects-wrap">
+      <div class="rail" aria-hidden="true"><span class="rail-fill" id="rail-fill"></span></div>
+      <div class="projects" id="project-list" style="padding-top: var(--s7)">
+
+        <!-- Задача 1 -->
+        <article class="project">
+          <div class="project-head">
+            <div class="project-title">
+              <h3 data-i18n="p1.title">Заявки с сайта сразу попадают в таблицу</h3>
+              <span class="project-kind" data-i18n="p1.kind">сайт, таблица, уведомление менеджеру</span>
+            </div>
+            <div class="nodes">
+              <span class="node-chip" data-i18n="node.site"><i style="background:#7a4a14"></i>Сайт</span>
+              <span class="node-chip" data-i18n="node.check"><i style="background:#a8681f"></i>Проверка</span>
+              <span class="node-chip" data-i18n="node.condition"><i style="background:#c08a3a"></i>Условие</span>
+              <span class="node-chip" data-i18n="node.table"><i style="background:#d9a85e"></i>Таблица</span>
+            </div>
+          </div>
+
+          <figure class="shot">
+            <div class="shot-inner"><img src="screenshots/01-canvas.png" alt="Канва n8n: заявка с сайта, проверка данных, условие с двумя ветками, запись в таблицу, уведомление менеджеру и ответ клиенту" data-i18n-alt="alt.enquiry" loading="lazy" /></div>
+            <figcaption>
+              <span data-i18n="p1.cap1">7 шагов</span><span data-i18n="p1.cap2">2 ветки</span><span data-i18n="p1.cap3">таблица заявок и список уведомлений</span>
+
+              <span class="shot-hint">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5M11 8v6M8 11h6"/></svg>
+                увеличить
+              </span>
+            </figcaption>
+          </figure>
+
+          <dl class="spec">
+            <div>
+              <dt data-i18n="spec.before">Было</dt>
+              <dd data-i18n="p1.before">Заявки с сайта приходили в почту, менеджер отвечал вручную. Часть заявок терялась.</dd>
+            </div>
+            <div>
+              <dt data-i18n="spec.after">Стало</dt>
+              <dd data-i18n="p1.after">Заявка с сайта сразу попадает в таблицу, менеджер получает уведомление. Клиенту отвечают: «свяжемся в течение 15 минут». Если в имени, телефоне или почте ошибка, заявка не пропадает. Она попадает в отдельный список с пометкой, что исправить.</dd>
+            </div>
+            <div>
+              <dt data-i18n="spec.result">Результат</dt>
+              <dd data-i18n="p1.result">Проверил на двух заявках: правильной и заведомо испорченной. Первая попала в таблицу, вторая в список ошибок.</dd>
+            </div>
+          </dl>
+
+          <div class="gets">
+            <span class="gets-label" data-i18n="gets.label">Что получает клиент</span>
+            <ul>
+              <li data-i18n="p1.get1">Таблица, куда заявки попадают сразу с сайта</li>
+              <li data-i18n="p1.get2">Уведомление менеджеру о каждой новой заявке</li>
+              <li data-i18n="p1.get3">Отдельный список заявок с ошибками и подсказкой, что исправить</li>
+            </ul>
+          </div>
+        </article>
+
+        <!-- Задача 2 -->
+        <article class="project">
+          <div class="project-head">
+            <div class="project-title">
+              <h3 data-i18n="p2.title">Посты сами выходят в Telegram-канал</h3>
+              <span class="project-kind" data-i18n="p2.kind">Google Таблицы и Telegram</span>
+            </div>
+            <div class="nodes">
+              <span class="node-chip"><i style="background:#a8681f"></i>Сбор текста</span>
+              <span class="node-chip" data-i18n="node.condition"><i style="background:#c08a3a"></i>Условие</span>
+              <span class="node-chip" data-i18n="node.table"><i style="background:#d9a85e"></i>Таблица</span>
+            </div>
+          </div>
+
+          <figure class="shot">
+            <div class="shot-inner"><img src="screenshots/02-canvas.png" alt="Канва n8n: расписание, чтение очереди контента, проверка статуса, сборка текста поста, публикация в канал и отметка опубликовано" data-i18n-alt="alt.content" loading="lazy" /></div>
+            <figcaption>
+              <span data-i18n="p2.cap1">6 шагов</span><span data-i18n="p2.cap2">1 ветка</span><span data-i18n="p2.cap3">очередь постов и список опубликованных</span>
+
+              <span class="shot-hint">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5M11 8v6M8 11h6"/></svg>
+                увеличить
+              </span>
+            </figcaption>
+          </figure>
+
+          <dl class="spec">
+            <div>
+              <dt data-i18n="spec.before">Было</dt>
+              <dd data-i18n="p2.before">Посты из таблицы копировали в канал вручную. Черновики иногда попадали в эфир, а одни и те же посты выходили дважды.</dd>
+            </div>
+            <div>
+              <dt data-i18n="spec.after">Стало</dt>
+              <dd data-i18n="p2.after">Каждые 5 минут система сама берёт готовые, одобренные посты. Она собирает текст с хештегами и публикует его в канале. Черновики и отклонённые посты она не трогает.</dd>
+            </div>
+            <div>
+              <dt data-i18n="spec.result">Результат</dt>
+              <dd data-i18n="p2.result">В проверке стояло 4 поста, ушли ровно 2: только одобренные.</dd>
+            </div>
+          </dl>
+
+          <div class="gets">
+            <span class="gets-label" data-i18n="gets.label">Что получает клиент</span>
+            <ul>
+              <li data-i18n="p2.get1">Публикация одобренных постов каждые 5 минут</li>
+              <li data-i18n="p2.get2">Текст с хештегами, собранный автоматически</li>
+              <li data-i18n="p2.get3">Защита черновиков и отклонённых постов от случайного выхода</li>
+            </ul>
+          </div>
+        </article>
+
+        <!-- Задача 3 -->
+        <article class="project">
+          <div class="project-head">
+            <div class="project-title">
+              <h3 data-i18n="p3.title">Повторные заявки больше не попадают в базу</h3>
+              <span class="project-kind" data-i18n="p3.kind">заявки, таблица, ответ клиенту</span>
+            </div>
+            <div class="nodes">
+              <span class="node-chip" data-i18n="node.site"><i style="background:#7a4a14"></i>Сайт</span>
+              <span class="node-chip" data-i18n="node.check"><i style="background:#a8681f"></i>Проверка</span>
+              <span class="node-chip" data-i18n="node.condition"><i style="background:#c08a3a"></i>Условие</span>
+              <span class="node-chip" data-i18n="node.table"><i style="background:#d9a85e"></i>Таблица</span>
+            </div>
+          </div>
+
+          <figure class="shot">
+            <div class="shot-inner"><img src="screenshots/03-canvas.png" alt="Канва n8n: заявка с лендинга, проверка и поиск повтора, условие с ветками создания записи и ответа о повторе" data-i18n-alt="alt.landing" loading="lazy" /></div>
+            <figcaption>
+              <span data-i18n="p3.cap1">9 шагов</span><span data-i18n="p3.cap2">2 ветки</span><span data-i18n="p3.cap3">база заявок и список уведомлений</span>
+
+              <span class="shot-hint">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5M11 8v6M8 11h6"/></svg>
+                увеличить
+              </span>
+            </figcaption>
+          </figure>
+
+          <dl class="spec">
+            <div>
+              <dt data-i18n="spec.before">Было</dt>
+              <dd data-i18n="p3.before">Один клиент оставлял заявку несколько раз. Отдел продаж тратил время на ручную проверку.</dd>
+            </div>
+            <div>
+              <dt data-i18n="spec.after">Стало</dt>
+              <dd data-i18n="p3.after">Система узнаёт повтор по почте или телефону и не создаёт вторую запись. Новой заявке отвечает «заявка зарегистрирована», повторной «такая заявка уже была, статус прежний». Заявки с пометкой «нужен прайс» и телефоном сразу уходят отдельному человеку.</dd>
+            </div>
+            <div>
+              <dt data-i18n="spec.result">Результат</dt>
+              <dd data-i18n="p3.result">Одна запись на клиента вместо нескольких, ручной проверки повторов больше нет.</dd>
+            </div>
+          </dl>
+
+          <div class="gets">
+            <span class="gets-label" data-i18n="gets.label">Что получает клиент</span>
+            <ul>
+              <li data-i18n="p3.get1">Одна запись на клиента, даже если он писал несколько раз</li>
+              <li data-i18n="p3.get2">Разные ответы для новой и повторной заявки</li>
+              <li data-i18n="p3.get3">Передача заявок с пометкой «нужен прайс» отдельному человеку</li>
+            </ul>
+          </div>
+        </article>
+
+        <!-- Задача 4 -->
+        <article class="project">
+          <div class="project-head">
+            <div class="project-title">
+              <h3 data-i18n="p4.title">Утренняя сводка по заявкам в 9:00</h3>
+              <span class="project-kind" data-i18n="p4.kind">таблица, сообщение в чат</span>
+            </div>
+            <div class="nodes">
+              <span class="node-chip" data-i18n="node.gather"><i style="background:#a8681f"></i>Свод данных</span>
+              <span class="node-chip" data-i18n="node.table"><i style="background:#d9a85e"></i>Таблица</span>
+            </div>
+          </div>
+
+          <figure class="shot">
+            <div class="shot-inner"><img src="screenshots/04-canvas.png" alt="Канва n8n: расписание на 9:00, чтение заявок, сведение данных в одно число, сборка текста сводки, отправка и сохранение в историю" data-i18n-alt="alt.report" loading="lazy" /></div>
+            <figcaption>
+              <span data-i18n="p4.cap1">6 шагов</span><span data-i18n="p4.cap2">1 расписание</span><span data-i18n="p4.cap3">таблица заявок и история сводок</span>
+
+              <span class="shot-hint">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5M11 8v6M8 11h6"/></svg>
+                увеличить
+              </span>
+            </figcaption>
+          </figure>
+
+          <dl class="spec">
+            <div>
+              <dt data-i18n="spec.before">Было</dt>
+              <dd data-i18n="p4.before">Каждое утро менеджер сводил цифры в таблице и пересылал сводку в чат. Считал каждый раз по-разному.</dd>
+            </div>
+            <div>
+              <dt data-i18n="spec.after">Стало</dt>
+              <dd data-i18n="p4.after">Каждое утро в 9:00 система сама собирает заявки за сутки. Она присылает одно сообщение: всего заявок, сколько срочных, средний приоритет, сумма бюджетов и откуда пришли. Сводки сохраняются, поэтому прошлый день можно сравнить с сегодняшним.</dd>
+            </div>
+            <div>
+              <dt data-i18n="spec.result">Результат</dt>
+              <dd data-i18n="p4.result">В последней сводке: 6 заявок, 5 срочных, средний приоритет 77 из 100, бюджеты на 580 000 ₽.</dd>
+            </div>
+          </dl>
+
+          <div class="gets">
+            <span class="gets-label" data-i18n="gets.label">Что получает клиент</span>
+            <ul>
+              <li data-i18n="p4.get1">Сообщение в чат каждое утро в 9:00</li>
+              <li data-i18n="p4.get2">Одинаковый подсчёт каждый день без ручной работы</li>
+              <li data-i18n="p4.get3">Сохранённая история сводок для сравнения дней</li>
+            </ul>
+          </div>
+        </article>
+
+      </div>
+    </div>
+  </section>
+
+  <div class="rule" data-rule></div>
+
+  <!-- ================= ПРЕЗЕНТАЦИЯ ================= -->
+  <section class="section deck" id="deck">
+    <div class="deck-stage">
+      <div class="deck-window">
+        <span class="deck-grid" aria-hidden="true"></span>
+        <div class="deck-chrome">
+          <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
+          <span data-i18n="deck.chrome">система n8n на моём сервере</span>
+        </div>
+
+        <div class="deck-body">
+          <div class="deck-copy">
+            <div class="deck-slide-copy is-on" data-copy="0">
+              <div class="deck-slide-in">
+                <span class="deck-step" data-i18n="deck.s1.step">шаг 1</span>
+                <h3 data-i18n="deck.s1.title">Заявка приходит и сразу идёт в работу</h3>
+                <p data-i18n="deck.s1.text">Форма на сайте отправляет заявку прямо в систему, а не в почту, где она лежит до конца дня и половина теряется.</p>
+              </div>
+            </div>
+            <div class="deck-slide-copy" data-copy="1">
+              <div class="deck-slide-in">
+                <span class="deck-step" data-i18n="deck.s2.step">шаг 2</span>
+                <h3 data-i18n="deck.s2.title">Данные проверяются, а не теряются</h3>
+                <p data-i18n="deck.s2.text">Имя, телефон и почта сверяются. Если человек ошибся, заявка не исчезает: она попадает в отдельный список с пометкой, что исправить.</p>
+              </div>
+            </div>
+            <div class="deck-slide-copy" data-copy="2">
+              <div class="deck-slide-in">
+                <span class="deck-step" data-i18n="deck.s3.step">шаг 3</span>
+                <h3 data-i18n="deck.s3.title">Заявка лежит в таблице и расходится дальше</h3>
+                <p data-i18n="deck.s3.text">Из одной таблицы заявка уходит менеджеру в уведомление, попадает в контент-план и учитывается в утренней сводке.</p>
+              </div>
+            </div>
+            <div class="deck-slide-copy" data-copy="3">
+              <div class="deck-slide-in">
+                <span class="deck-step" data-i18n="deck.s4.step">шаг 4</span>
+                <h3 data-i18n="deck.s4.title">Утром приходит одна сводка</h3>
+                <p data-i18n="deck.s4.text">В 9:00 система закрывает день одним сообщением: сколько заявок, сколько из них срочных, откуда они пришли и какие бюджеты. Дальше это просто таблица, в которой видно динамику.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="deck-map">
+            <svg id="deck-svg" viewBox="8 30 600 360" role="img" aria-label="Карта системы: сайт, проверка данных, таблица заявок, уведомление менеджеру, канал и утренняя сводка">
+              <g id="dedges">
+                <path id="de1" class="dedge" pathLength="1" d="M114,210 L142,210" />
+                <path id="de2" class="dedge" pathLength="1" d="M258,210 L278,210" />
+                <path id="de3" class="dedge" pathLength="1" d="M394,210 C424,210 428,60 452,60" />
+                <path id="de4" class="dedge" pathLength="1" d="M394,210 L452,210" />
+                <path id="de5" class="dedge" pathLength="1" d="M394,210 C424,210 428,360 452,360" />
+              </g>
+
+              <!-- пакет позади нод: заходит в узел и прячется -->
+              <circle class="dpacket" id="dpacket" r="5" cx="0" cy="0" opacity="0" />
+
+              <g class="dnode" id="dn1" transform="translate(10,186)">
+                <rect width="104" height="48" rx="3" /><rect class="sw" x="14" y="19" width="10" height="10" fill="#7a4a14" />
+                <text x="32" y="28">Сайт</text>
+              </g>
+              <g class="dnode" id="dn2" transform="translate(142,186)">
+                <rect width="116" height="48" rx="3" /><rect class="sw" x="14" y="19" width="10" height="10" fill="#a8681f" />
+                <text x="32" y="28">Проверка</text>
+              </g>
+              <g class="dnode" id="dn3" transform="translate(278,186)">
+                <rect width="116" height="48" rx="3" /><rect class="sw" x="14" y="19" width="10" height="10" fill="#c08a3a" />
+                <text x="32" y="28">Таблица</text>
+              </g>
+              <g class="dnode" id="dn4" transform="translate(452,36)">
+                <rect width="152" height="48" rx="3" /><rect class="sw" x="14" y="19" width="10" height="10" fill="#d9a85e" />
+                <text x="32" y="28">Менеджеру</text>
+              </g>
+              <g class="dnode" id="dn5" transform="translate(452,186)">
+                <rect width="152" height="48" rx="3" /><rect class="sw" x="14" y="19" width="10" height="10" fill="#d9a85e" />
+                <text x="32" y="28">В канал</text>
+              </g>
+              <g class="dnode" id="dn6" transform="translate(452,336)">
+                <rect width="152" height="48" rx="3" /><rect class="sw" x="14" y="19" width="10" height="10" fill="#e0a85c" />
+                <text x="32" y="28">Сводка</text>
+              </g>
+
+            </svg>
+          </div>
+        </div>
+
+        <div class="deck-foot">
+          <span class="deck-count"><b id="deck-num">1</b> / 4</span>
+          <div class="deck-bar"><span class="deck-bar-fill" id="deck-bar"></span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="rule" data-rule></div>
+
+  <!-- ================= КАК Я РАБОТАЮ ================= -->
+  <section class="section how" id="how">
+    <div class="section-head">
+      <h2 data-i18n="how.title">Как я работаю</h2>
+      <p data-i18n="how.text">Три шага от вашего описания задачи до работающего решения, которое можно показать и потрогать.</p>
+    </div>
+
+    <div class="how-grid">
+      <div class="how-cell">
+        <span class="step" data-i18n="deck.s1.step">шаг 1</span>
+        <h4 data-i18n="how.s1.title">Разбираем вашу задачу</h4>
+        <p data-i18n="how.s1.text">Вы рассказываете, что сейчас делаете вручную. Я уточняю детали и называю цену до начала работы.</p>
+      </div>
+      <div class="how-cell">
+        <span class="step" data-i18n="deck.s2.step">шаг 2</span>
+        <h4 data-i18n="how.s2.title">Собираю и проверяю</h4>
+        <p data-i18n="how.s2.text">Я собираю схему работы и прогоняю её на тестовых данных. Вы видите, как всё работает.</p>
+      </div>
+      <div class="how-cell">
+        <span class="step" data-i18n="deck.s3.step">шаг 3</span>
+        <h4 data-i18n="how.s3.title">Передаю и показываю</h4>
+        <p data-i18n="how.s3.text">Вы получаете готовое решение и короткую инструкцию. Если что-то сломалось, помогу бесплатно.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="rule" data-rule></div>
+
+  <!-- ================= КАК ПОЛУЧИТЬ ================= -->
+  <section class="section" id="delivery">
+    <div class="section-head">
+      <h2 data-i18n="delivery.title">Как вы это получите</h2>
+      <p data-i18n="delivery.text">Два способа. Разница — в том, есть ли у вас уже своя копия n8n и свой сервер.</p>
+    </div>
+
+    <div class="delivery">
+      <div class="delivery-item">
+        <h4 data-i18n="delivery.1.title">Файлы</h4>
+        <p data-i18n="delivery.1.text">Я отдаю готовые файлы сценария и короткую инструкцию. Вы или ваш технический человек загружаете их в свою копию n8n и создаёте таблицы с указанными именами. Подходит, если n8n у вас уже есть.</p>
+      </div>
+      <div class="delivery-item">
+        <h4 data-i18n="delivery.2.title">Полная настройка</h4>
+        <p data-i18n="delivery.2.text">Я сам запускаю n8n на вашем сервере или на свободном сервере под ваш проект. Создаю таблицы, подключаю Telegram, Google Таблицы или базу заявок и показываю работу на тестовых данных. Подходит, если своего сервера нет. Дальше остаётся поддержка, и пока она бесплатная.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="rule" data-rule></div>
+
+  <!-- ================= ЦЕНЫ ================= -->
+  <section class="section" id="pricing">
+    <div class="section-head">
+      <h2 data-i18n="price.title">Сколько стоит работа</h2>
+      <p data-i18n="price.lead">Цена «от» включает саму схему, проверку на тестовых данных и короткую инструкцию. Поддержка после сдачи — бесплатно.</p>
+    </div>
+
+    <div class="pricing">
+      <div class="price-row">
+        <span class="price-name" data-i18n="price.1">Простая автоматизация с одним сервисом</span>
+        <span class="price-value">от 1 000 ₽</span>
+      </div>
+      <div class="price-row">
+        <span class="price-name" data-i18n="price.2">Связка двух-трёх сервисов, например заявки с сайта в Telegram</span>
+        <span class="price-value">от 1 500 ₽</span>
+      </div>
+      <div class="price-row">
+        <span class="price-name" data-i18n="price.3">Многошаговый сценарий с расписанием и отчётами</span>
+        <span class="price-value">от 2 000 ₽</span>
+      </div>
+      <div class="price-row">
+        <span class="price-name" data-i18n="price.4">Полная настройка на вашем сервере с проверкой и обучением</span>
+        <span class="price-value">от 2 500 ₽</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="rule" data-rule></div>
+
+  <!-- ================= ВОПРОСЫ ================= -->
+  <section class="section" id="faq">
+    <div class="section-head">
+      <h2 data-i18n="faq.title">Частые вопросы</h2>
+      <p data-i18n="faq.text">Те, что задают чаще всего, когда решаются автоматизировать что-то впервые.</p>
+    </div>
+
+    <div class="faq">
+      <details class="faq-item">
+        <summary data-i18n="faq.1.q">Я ничего не понимаю в автоматизации. Мне это подойдёт?</summary>
+        <p data-i18n="faq.1.a">Да. Вы рассказываете, что делаете вручную, а я предлагаю решение простыми словами и называю цену до начала работы.</p>
+      </details>
+      <details class="faq-item">
+        <summary data-i18n="faq.2.q">А если у меня нет своего сервера?</summary>
+        <p data-i18n="faq.2.a">Тогда я сам запущу n8n на вашем сервере или на свободном под ваш проект. Это вариант «Полная настройка», от 2 500 ₽.</p>
+      </details>
+      <details class="faq-item">
+        <summary data-i18n="faq.3.q">Что будет, если что-то сломается?</summary>
+        <p data-i18n="faq.3.a">Пока поддержка бесплатная: если что-то сломалось, неполадками занимаюсь я. Если вы взяли только файлы, поможет короткая инструкция.</p>
+      </details>
+      <details class="faq-item">
+        <summary data-i18n="faq.4.q">Можно ли сначала проверить, как это работает?</summary>
+        <p data-i18n="faq.4.a">Да. Перед сдачей я прогоняю сценарий на тестовых данных и показываю результат. Например, из 4 тестовых постов ушли ровно 2.</p>
+      </details>
+    </div>
+  </section>
+
+  <div class="rule" data-rule></div>
+
+  <!-- ================= КОНТАКТ ================= -->
+  <section class="contact" id="contact">
+    <div>
+      <h2 data-i18n="contact.title">Расскажите, что вы делаете вручную</h2>
+      <p data-i18n="contact.text">Напишите, какую задачу хотите убрать из ручной работы. Я отвечу, подойдёт ли автоматизация и сколько она будет стоить.</p>
+      <div class="actions">
+        <a class="btn" href="mailto:kudinovr636@gmail.com" data-i18n="contact.cta1">Написать</a>
+        <a class="btn btn-quiet" href="#pricing" data-i18n="hero.cta2">Посмотреть цены</a>
+      </div>
+    </div>
+    <div class="contact-aside">
+      <span data-i18n="contact.line1">n8n 2.47.4, self-hosted</span>
+      <span data-i18n="contact.line2">Приём заявок, посты, сводки</span>
+      <span><a href="mailto:kudinovr636@gmail.com">kudinovr636@gmail.com</a></span>
+      <span data-i18n="contact.line4">Ответ придёт от меня лично</span>
+    </div>
+  </section>
+
+  <footer>
+    <span data-i18n="footer.1">Я работаю один и беру небольшие задачи для малого бизнеса</span>
+    <span data-i18n="footer.2">Собрано на локальном инстансе, все запуски проверены</span>
+  </footer>
+
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let currentLang = 'ru';
+
+  /* ---------- Индикатор прокрутки + рельс + счётчик ---------- */
+  const progress = document.getElementById('progress');
+  const railFill = document.getElementById('rail-fill');
+  const navCounter = document.getElementById('nav-counter');
+  const wrap = document.getElementById('projects-wrap');
+  const projectEls = [...document.querySelectorAll('.project')];
+
+  let ticking = false;
+  const onScroll = () => {
+    const h = document.documentElement;
+    const max = h.scrollHeight - h.clientHeight;
+    const y = window.scrollY;
+    progress.style.transform = `scaleX(${max > 0 ? y / max : 0})`;
+
+    // рельс заполняется по мере прохода списка сценариев
+    if (wrap && railFill) {
+      const rect = wrap.getBoundingClientRect();
+      const vh = window.innerHeight;
+      const railTop = rect.top + window.scrollY;
+      const railH = rect.height;
+      const p = (y + vh * 0.72 - railTop) / railH;
+      railFill.style.height = `${Math.min(1, Math.max(0, p)) * 100}%`;
+    }
+
+    // активный сценарий: последний, чей верх выше отметки 40% экрана
+    const mark = window.innerHeight * 0.4;
+    let activeIndex = -1;
+    projectEls.forEach((el, i) => {
+      const top = el.getBoundingClientRect().top;
+      const isActive = top <= mark && top + el.offsetHeight > mark;
+      el.classList.toggle('active', isActive);
+      if (isActive) activeIndex = i;
+    });
+
+    if (navCounter) {
+      const inSection = wrap && wrap.getBoundingClientRect().top < window.innerHeight * 0.8
+        && wrap.getBoundingClientRect().bottom > 0;
+      navCounter.classList.toggle('on', inSection);
+      if (inSection && activeIndex >= 0) {
+        const d = (window.I18N && window.I18N[currentLang || 'ru']) || {};
+        navCounter.textContent = `${d['nav.counter'] || 'сценарий'} ${activeIndex + 1} ${d['nav.of'] || 'из'} ${projectEls.length}`;
+      }
+    }
+
+    ticking = false;
+  };
+  window.addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(onScroll);
+  }, { passive: true });
+  onScroll();
+
+  /* ---------- Рисуем канву в герое ---------- */
+  const edges = ['e1', 'e2', 'e3', 'e4'].map((id) => document.getElementById(id));
+  const nodes = ['n1', 'n2', 'n3', 'n4', 'n5'].map((id) => document.getElementById(id));
+  const paths = ['p1', 'p2', 'p3', 'p4'].map((id) => document.getElementById(id));
+  const packet = document.getElementById('packet');
+  const state = document.getElementById('graph-state');
+  const svg = document.getElementById('hero-graph');
+
+  const tr = (key, fallback) => (window.I18N?.[currentLang] || window.I18N?.ru || {})[key] || fallback;
+
+  // Схема в шапке проигрывается заново каждый раз, когда попадает в кадр.
+  // У телефона своя вертикальная схема — горизонтальная на экране 390px нечитаема.
+  // Пакет едет по линии, линия дорисовывается одновременно с ним,
+  // а нода зажигается ровно в момент прихода.
+  let heroTls = [];
+
+  const HERO_SETS = {
+    desktop: {
+      paths: ['p1', 'p2', 'p3', 'p4'].map((id) => document.getElementById(id)),
+      edges: ['e1', 'e2', 'e3', 'e4'].map((id) => document.getElementById(id)),
+      nodes: ['n1', 'n2', 'n3', 'n4', 'n5'].map((id) => document.getElementById(id)),
+      packet: document.getElementById('packet'),
+      legs: [[0, 0, 1], [1, 1, 2], [2, 2, 3], [3, 3, 4]],
+    },
+    mobile: {
+      paths: ['mp1', 'mp2', 'mp3', 'mp4'].map((id) => document.getElementById(id)),
+      edges: ['mp1', 'mp2', 'mp3', 'mp4'].map((id) => document.getElementById(id)),
+      nodes: ['mn1', 'mn2', 'mn3', 'mn4', 'mn5'].map((id) => document.getElementById(id)),
+      packet: document.getElementById('packet-m'),
+      legs: [[0, 0, 1], [1, 1, 2], [2, 2, 3], [3, 3, 4]],
+    },
+  };
+
+  // пакет едет по пути с постоянной скоростью
+  const ride = (route, duration, packet) => {
+    const proxy = { t: 0 };
+    const len = route.getTotalLength();
+    return window.gsap.to(proxy, {
+      t: 1,
+      duration,
+      ease: 'none',
+      onUpdate: () => {
+        const pt = route.getPointAtLength(len * proxy.t);
+        packet.setAttribute('cx', pt.x);
+        packet.setAttribute('cy', pt.y);
+      },
+    });
+  };
+
+  const buildFlow = (set) => {
+    const { gsap } = window;
+    const packet = set.packet;
+    const tl = gsap.timeline({ repeat: -1, repeatDelay: 0.5 });
+
+    set.legs.forEach((leg, i) => {
+      const [pathIdx, edgeIdx, nodeIdx] = leg;
+      const legTl = gsap.timeline();
+
+      // линия тянется ровно так же, как едет пакет: кончик линии ведёт пакет
+      legTl.fromTo(
+        set.edges[edgeIdx],
+        { strokeDashoffset: 1 },
+        { strokeDashoffset: 0, duration: 0.85, ease: 'none' },
+        0,
+      );
+      legTl.add(ride(set.paths[pathIdx], 0.85, packet), 0);
+      legTl.to(packet, { opacity: 1, duration: 0.12 }, 0);
+
+      // нода вспыхивает ровно тогда, когда пакет дошёл до её края
+      legTl.fromTo(
+        set.nodes[nodeIdx],
+        { opacity: 0.25, scale: 0.94 },
+        { opacity: 1, scale: 1, duration: 0.4, ease: 'power3.out' },
+        0.85,
+      );
+      legTl.to(set.nodes[nodeIdx].querySelector('rect'), { stroke: '#a8681f', duration: 0.4 }, 0.85);
+      legTl.to(
+        set.nodes[nodeIdx].querySelector('.sw'),
+        { scale: 1.3, transformOrigin: '50% 50%', duration: 0.4 },
+        0.88,
+      );
+
+      // предыдущая нода притухает — взгляд идёт за пакетом
+      if (i > 0) {
+        const prev = set.nodes[set.legs[i - 1][2]];
+        legTl.to(prev, { opacity: 0.45, scale: 0.97, duration: 0.4 }, 0.85);
+        legTl.to(prev.querySelector('rect'), { stroke: 'rgba(255,255,255,0.18)', duration: 0.4 }, 0.85);
+        legTl.to(prev.querySelector('.sw'), { scale: 1, transformOrigin: '50% 50%', duration: 0.4 }, 0.85);
+      }
+
+      // пауза в узле: пакет прячется за корпусом
+      legTl.to(packet, { opacity: 0, duration: 0.18 }, 0.95);
+      legTl.to({}, { duration: 0.3 });
+
+      tl.add(legTl);
+    });
+
+    // на новом круге всё начинается заново
+    tl.eventCallback('onRepeat', () => {
+      gsap.set(set.edges, { strokeDashoffset: 1 });
+      gsap.set(set.nodes, { opacity: 0.25, scale: 0.94, transformOrigin: '50% 50%' });
+      gsap.set(set.nodes[0], { opacity: 1, scale: 1 });
+      gsap.set(set.nodes.map((n) => n.querySelector('rect')), { stroke: 'rgba(255,255,255,0.18)' });
+      gsap.set(set.nodes[0].querySelector('rect'), { stroke: '#a8681f' });
+      gsap.set(packet, { opacity: 0 });
+    });
+
+    return tl;
+  };
+
+  const playHero = () => {
+    heroTls.forEach((t) => t.kill());
+    heroTls = [];
+    const { gsap } = window;
+    const isMobile = window.matchMedia('(max-width: 640px)').matches;
+    const set = isMobile ? HERO_SETS.mobile : HERO_SETS.desktop;
+
+    // стартовое состояние: первая нода горит, линии скрыты
+    if (gsap) {
+      // transform задаём через GSAP: он складывает масштаб с translate
+      // из атрибута transform, а inline-style его бы затёр
+      gsap.set(set.edges, { strokeDasharray: 1, strokeDashoffset: 1 });
+      gsap.set(set.nodes, { opacity: 0.25, scale: 0.94, transformOrigin: '50% 50%' });
+      gsap.set(set.nodes[0], { opacity: 1, scale: 1 });
+      gsap.set(set.packet, { opacity: 0 });
+    } else {
+      set.edges.forEach((u) => { u.style.strokeDasharray = '1'; u.style.strokeDashoffset = '1'; });
+      set.nodes.forEach((n) => { n.style.opacity = '0.25'; });
+      set.nodes[0].style.opacity = '1';
+    }
+
+    if (reduce) {
+      state.textContent = tr('hero.graphStatic', 'статично');
+      set.edges.forEach((u) => { u.style.strokeDashoffset = '0'; });
+      set.nodes.forEach((n) => { n.style.opacity = '1'; });
+      return;
+    }
+    heroTls.push(buildFlow(set));
+    state.textContent = tr('hero.graphFlowing', 'данные идут');
+  };
+
+  // GSAP подключён с defer, поэтому стартуем после загрузки страницы
+  const startHero = () => playHero();
+  if (document.readyState === 'complete') startHero();
+  else window.addEventListener('load', startHero);
+
+  // смена ширины экрана пересобирает нужную версию схемы
+  let lastMobile = window.matchMedia('(max-width: 640px)').matches;
+  window.addEventListener('resize', () => {
+    const nowMobile = window.matchMedia('(max-width: 640px)').matches;
+    if (nowMobile !== lastMobile) {
+      lastMobile = nowMobile;
+      startHero();
+    }
+  });
+
+  // возврат к шапке — схема проигрывается снова
+  const heroBox = document.querySelector('.hero');
+  if (heroBox) {
+    let heroVisible = true;
+    const heroIO = new IntersectionObserver((entries) => {
+      entries.forEach((e) => {
+        if (e.isIntersecting && !heroVisible) startHero();
+        heroVisible = e.isIntersecting;
+      });
+    }, { threshold: 0.25 });
+    heroIO.observe(heroBox);
+  }
+
+  // смена языка обновляет подпись схемы
+  window.addEventListener('lang:change', (e) => {
+    const d = (window.I18N && window.I18N[e.detail]) || {};
+    if (reduce) state.textContent = d['hero.graphStatic'] || 'статично';
+    else state.textContent = d['hero.graphFlowing'] || 'данные идут';
+  });
+
+  /* ---------- Появление блоков при прокрутке ----------
+     Наблюдатель двусторонний: блок проигрывает анимацию каждый раз,
+     когда попадает в кадр, и сбрасывается, когда уходит. */
+  const reveal = document.querySelectorAll('[data-rule], .shot, .how-cell, .project');
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((e) => {
+      if (e.isIntersecting) {
+        e.target.classList.add('in');
+      } else {
+        e.target.classList.remove('in');
+      }
+    });
+  }, { threshold: 0.14, rootMargin: '0px 0px -6% 0px' });
+  const howCells = [...document.querySelectorAll('.how-cell')];
+  howCells.forEach((cell, i) => { cell.style.transitionDelay = `${i * 110}ms`; });
+
+  // линейки и пункты в описаниях прочерчиваются с задержкой друг за другом
+  projectEls.forEach((project) => {
+    const cols = [...project.querySelectorAll('.spec > div')];
+    cols.forEach((col, i) => {
+      col.style.transitionDelay = `${i * 90}ms`;
+      col.querySelectorAll('dt, dd').forEach((n) => { n.style.transitionDelay = `${i * 90 + 180}ms`; });
+    });
+    const gets = [...project.querySelectorAll('.gets li')];
+    gets.forEach((li, i) => { li.style.transitionDelay = `${260 + i * 90}ms`; });
+  });
+
+  reveal.forEach((el) => io.observe(el));
+
+
+  /* ---------- Полноразмерный просмотр схемы (телефон) ---------- */
+  const lightbox = document.getElementById('lightbox');
+  const lbImg = document.getElementById('lightbox-img');
+  const lbClose = document.getElementById('lightbox-close');
+  const lbScroll = document.getElementById('lightbox-scroll');
+
+  const openLightbox = (src, alt) => {
+    if (!lightbox) return;
+    lbImg.src = src;
+    lbImg.alt = alt || '';
+    lbScroll.scrollLeft = 0;
+    lightbox.hidden = false;
+    document.body.style.overflow = 'hidden';
+    lbClose.focus();
+  };
+
+  const closeLightbox = () => {
+    if (!lightbox || lightbox.hidden) return;
+    lightbox.hidden = true;
+    document.body.style.overflow = '';
+  };
+
+  document.querySelectorAll('.shot').forEach((shot) => {
+    const img = shot.querySelector('img');
+    if (!img) return;
+    shot.addEventListener('click', (e) => {
+      // на широком экране лайтбокс не нужен — там схема видна целиком
+      if (!window.matchMedia('(max-width: 640px)').matches) return;
+      e.preventDefault();
+      openLightbox(img.getAttribute('src'), img.getAttribute('alt'));
+    });
+  });
+
+  lbClose?.addEventListener('click', closeLightbox);
+  lightbox?.addEventListener('click', (e) => {
+    if (e.target === lightbox) closeLightbox();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeLightbox();
+  });
+
+  /* ---------- Презентация: схема собирается по прокрутке ---------- */
+  const buildDeck = () => {
+    if (!window.gsap || !window.ScrollTrigger) return;
+    const { gsap, ScrollTrigger } = window;
+    gsap.registerPlugin(ScrollTrigger);
+
+    const stage = document.querySelector('.deck-stage');
+    const win = document.querySelector('.deck-window');
+    const slides = [...document.querySelectorAll('.deck-slide-copy')];
+    const nodes = ['dn1', 'dn2', 'dn3', 'dn4', 'dn5', 'dn6'].map((id) => document.getElementById(id));
+    const edges = ['de1', 'de2', 'de3', 'de4', 'de5'].map((id) => document.getElementById(id));
+    const packet = document.getElementById('dpacket');
+    const bar = document.getElementById('deck-bar');
+    const num = document.getElementById('deck-num');
+    if (!stage || slides.length < 4) return;
+
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.getElementById('deck-svg');
+    const makeRoute = (d) => {
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', d);
+      p.setAttribute('fill', 'none');
+      p.setAttribute('stroke', 'none');
+      svg.appendChild(p);
+      return p;
+    };
+    // маршруты пакета: только по тем рёбрам, которые к этому моменту уже нарисованы
+    const routeFirst = makeRoute('M114,210 L142,210 L258,210 L278,210');
+    const routeChannel = makeRoute('M394,210 L452,210');
+    const routeReport = makeRoute('M394,222 C424,222 428,360 452,360');
+
+    // пакет едет по маршруту; позиция считается вручную — без плагинов
+    const rideAlong = (route, duration) => {
+      const proxy = { t: 0 };
+      const len = route.getTotalLength();
+      return gsap.to(proxy, {
+        t: 1,
+        duration,
+        ease: 'none',
+        onUpdate: () => {
+          const pt = route.getPointAtLength(len * proxy.t);
+          packet.setAttribute('cx', pt.x);
+          packet.setAttribute('cy', pt.y);
+        },
+      });
+    };
+
+    // слой 1 (основной): появление узлов и рёбер
+    // слой 2 (вторичный): активный узел ярче, рамка и метка подсвечиваются
+    // слой 3 (ambient): сетка окна медленно ползёт, окно мягко въезжает
+    const mm = gsap.matchMedia();
+    const DIM = 0.26;
+
+    // начальное состояние текстовых кадров — одинаково для экранов
+    gsap.set(slides, { autoAlpha: 0 });
+    gsap.set(slides[0], { autoAlpha: 1 });
+    gsap.set(slides.map((sl) => sl.firstElementChild), { yPercent: 0 });
+    gsap.set(slides.slice(1).map((sl) => sl.firstElementChild), { yPercent: 100 });
+    gsap.set(packet, { opacity: 0 });
+
+    // На телефоне карта не помещается — показываем полноэкранный покадровый режим:
+    // таймлайн и залипание те же, но текст кадра занимает весь экран.
+    mm.add('(max-width: 640px)', () => {
+      gsap.set('.deck-map', { display: 'none' });
+    });
+
+    // На широком экране карта — главный элемент кадра
+    mm.add('(min-width: 641px)', () => {
+      gsap.set(nodes, { opacity: 0.26, scale: 0.94, transformOrigin: '50% 50%' });
+      gsap.set(nodes[0], { opacity: 1, scale: 1 });
+      gsap.set(nodes.map((n) => n.querySelector('rect')), { stroke: 'rgba(233,229,219,0.18)' });
+      gsap.set(nodes[0].querySelector('rect'), { stroke: '#a8681f' });
+      gsap.set(nodes.map((n) => n.querySelector('.sw')), { scale: 1, transformOrigin: '50% 50%' });
+      gsap.set(edges, { strokeDasharray: 1, strokeDashoffset: 1 });
+    });
+
+
+      // ambient: окно мягко въезжает, сетка ползёт
+      gsap.fromTo(
+        win,
+        { scale: 0.955, y: 30, opacity: 0 },
+        {
+          scale: 1, y: 0, opacity: 1, ease: 'power3.out',
+          scrollTrigger: { trigger: '#deck', start: 'top bottom', end: 'top top', scrub: 0.6 },
+        },
+      );
+      gsap.to('.deck-grid', {
+        y: -46,
+        ease: 'none',
+        scrollTrigger: { trigger: '#deck', start: 'top top', end: 'bottom top', scrub: 1 },
+      });
+
+      // моменты, когда на экране появляется новый текстовый кадр
+      // счётчик и текст меняются одним жестом: счётчик переключается
+      // в момент, когда начинает выезжать новый кадр.
+      // К моменту прихода пакета в узел новый текст уже стоит на месте.
+      const TEXT_MARKS = [0.55, 1.7, 3.4];
+
+      const tl = gsap.timeline({
+        scrollTrigger: {
+          trigger: '#deck',
+          start: 'top top',
+          end: () => '+=' + window.innerHeight * 4,
+          pin: stage,
+          pinSpacing: true,
+          scrub: 0.6,
+          anticipatePin: 1,
+          invalidateOnRefresh: true,
+          onUpdate: (self) => {
+            bar.style.transform = 'scaleX(' + self.progress + ')';
+            // счётчик совпадает с видимым текстовым кадром
+            const time = self.progress * tl.duration();
+            let frame = 1;
+            for (const mark of TEXT_MARKS) if (time >= mark) frame += 1;
+            num.textContent = String(Math.min(slides.length, frame));
+          },
+        },
+      });
+
+      const inners = slides.map((sl) => sl.firstElementChild);
+
+      // Текстовый кадр: старый уходит вверх из маски, новый входит снизу.
+      // at — момент, когда пакет приезжает в узел. Новый текст должен
+      // полностью встать ДО этого момента, иначе кардр отстаёт от картинки.
+      const swapText = (index, at) => {
+        const prev = slides[index - 1];
+        const next = slides[index];
+        tl.to(prev, { autoAlpha: 0, duration: 0.001, immediateRender: false }, at - 0.46)
+          .to(inners[index - 1], { yPercent: -100, duration: 0.32, ease: 'power2.in', immediateRender: false }, at - 0.78)
+          .set(next, { autoAlpha: 1 }, at - 0.5)
+          .fromTo(inners[index], { yPercent: 100 }, { yPercent: 0, duration: 0.46, ease: 'power3.out', immediateRender: false }, at - 0.5);
+      };
+
+      // этап: пакет едет по ребру, ребро тянется вместе с ним,
+      // в точке прихода зажигается узел
+      const leg = (edgeIdx, pathIdx, nodeIdx, from, to, dur) => {
+        tl.fromTo(edges[edgeIdx], { strokeDashoffset: 1 }, { strokeDashoffset: 0, duration: dur, ease: 'none' }, from);
+        tl.add(rideAlong(paths[pathIdx], dur), from);
+        tl.to(packet, { opacity: 1, duration: 0.12 }, from);
+        tl.fromTo(
+          nodes[nodeIdx],
+          { opacity: DIM, scale: 0.94 },
+          { opacity: 1, scale: 1, duration: 0.42, ease: 'power3.out' },
+          to,
+        );
+        tl.to(nodes[nodeIdx].querySelector('rect'), { stroke: '#a8681f', duration: 0.42 }, to);
+        tl.to(nodes[nodeIdx].querySelector('.sw'), { scale: 1.32, transformOrigin: '50% 50%', duration: 0.42 }, to + 0.03);
+        // пакет прячется за корпусом узла
+        tl.to(packet, { opacity: 0, duration: 0.16 }, to + 0.02);
+      };
+
+      // ветка без пакета: ребро дорисовывается, узел зажигается
+      const branch = (edgeIdx, nodeIdx, from, dur, color) => {
+        tl.fromTo(edges[edgeIdx], { strokeDashoffset: 1 }, { strokeDashoffset: 0, duration: dur, ease: 'none' }, from);
+        tl.fromTo(
+          nodes[nodeIdx],
+          { opacity: DIM, scale: 0.94 },
+          { opacity: 1, scale: 1, duration: 0.42, ease: 'power3.out' },
+          from + dur,
+        );
+        tl.to(nodes[nodeIdx].querySelector('rect'), { stroke: color, duration: 0.42 }, from + dur);
+        tl.to(nodes[nodeIdx].querySelector('.sw'), { scale: 1.32, transformOrigin: '50% 50%', duration: 0.42 }, from + dur + 0.03);
+      };
+
+      // маршруты пакета: по тем рёбрам, которые к этому моменту нарисованы
+      const paths = [
+        makeRoute('M114,210 L142,210'),        // Сайт → Проверка
+        makeRoute('M258,210 L278,210'),        // Проверка → Таблица
+        makeRoute('M394,210 C424,210 428,360 452,360'), // Таблица → Сводка
+      ];
+
+      // --- кадр 1: заявка приходит ---
+      // «Сайт» уже горит, текст первого шага на месте
+
+      // --- кадр 2: данные проверяются ---
+      swapText(1, 1.05);
+      leg(0, 0, 1, 0.3, 1.05, 0.75);
+      tl.to(nodes[0], { opacity: 0.42, scale: 0.97, duration: 0.4 }, 1.05);
+      tl.to(nodes[0].querySelector('rect'), { stroke: 'rgba(233,229,219,0.18)', duration: 0.4 }, 1.05);
+      tl.to(nodes[0].querySelector('.sw'), { scale: 1, transformOrigin: '50% 50%', duration: 0.4 }, 1.05);
+
+      // --- кадр 3: заявка расходится по системе ---
+      swapText(2, 2.2);
+      leg(1, 1, 2, 1.45, 2.2, 0.75);
+      tl.to(nodes[1], { opacity: 0.42, scale: 0.97, duration: 0.4 }, 2.2);
+      tl.to(nodes[1].querySelector('rect'), { stroke: 'rgba(233,229,219,0.18)', duration: 0.4 }, 2.2);
+      tl.to(nodes[1].querySelector('.sw'), { scale: 1, transformOrigin: '50% 50%', duration: 0.4 }, 2.2);
+      // вилка: две ветки раскрываются и зажигаются
+      branch(2, 3, 2.35, 0.5, '#c08a3a');
+      branch(3, 4, 2.55, 0.5, '#c08a3a');
+
+      // --- кадр 4: утренняя сводка ---
+      swapText(3, 3.9);
+      leg(4, 2, 5, 3.05, 3.9, 0.85);
+      tl.to(nodes[2], { opacity: 0.42, scale: 0.97, duration: 0.4 }, 3.9);
+      tl.to(nodes[2].querySelector('rect'), { stroke: 'rgba(233,229,219,0.18)', duration: 0.4 }, 3.9);
+      tl.to(nodes[2].querySelector('.sw'), { scale: 1, transformOrigin: '50% 50%', duration: 0.4 }, 3.9);
+      tl.to(nodes[5].querySelector('rect'), { stroke: '#dfae6b', duration: 0.42 }, 3.9);
+      tl.to(nodes[3], { opacity: 0.42, scale: 0.97, duration: 0.4 }, 3.9);
+      tl.to(nodes[4], { opacity: 0.42, scale: 0.97, duration: 0.4 }, 3.9);
+  };
+
+  if (document.readyState === 'complete') buildDeck();
+  else window.addEventListener('load', buildDeck);
+
+  /* ---------- Переключатель языка ---------- */
+  const langBox = document.getElementById('lang');
+  const thumb = document.getElementById('lang-thumb');
+  const langOpts = [...document.querySelectorAll('.lang-opt')];
+  const i18n = window.I18N;
+
+  const moveThumb = (opt, animate) => {
+    if (!thumb || !opt) return;
+    const box = langBox.getBoundingClientRect();
+    const r = opt.getBoundingClientRect();
+    const x = r.left - box.left - 2;
+
+    if (!animate || !window.gsap) {
+      thumb.style.transform = `translateX(${x}px)`;
+      return;
+    }
+
+    // Морфинг общего элемента: «пережатие» в капсулу → перетекание → расправление.
+    // Форма меняется по ходу движения, поэтому переход читается как поток, а не сдвиг.
+    const { gsap } = window;
+    gsap.killTweensOf(thumb);
+    gsap
+      .timeline()
+      .to(thumb, { scaleX: 0.42, borderRadius: 999, duration: 0.2, ease: 'power2.in' })
+      .to(thumb, { x, duration: 0.36, ease: 'power2.inOut' }, 0.06)
+      .to(thumb, { scaleX: 1, borderRadius: 3, duration: 0.3, ease: 'power3.out' }, 0.3);
+  };
+
+  const setLang = (lang, animate) => {
+    if (!i18n || !i18n[lang]) return;
+    const dict = i18n[lang];
+
+    // текст и атрибуты
+    document.querySelectorAll('[data-i18n]').forEach((el) => {
+      const val = dict[el.dataset.i18n];
+      if (val !== undefined) el.innerHTML = val;
+    });
+    document.querySelectorAll('[data-i18n-alt]').forEach((el) => {
+      const val = dict[el.dataset.i18nAlt];
+      if (val !== undefined) el.setAttribute('alt', val);
+    });
+
+    // состояние кнопок
+    langOpts.forEach((b) => {
+      const on = b.dataset.lang === lang;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-pressed', String(on));
+    });
+
+    document.documentElement.lang = lang;
+    moveThumb(langOpts.find((b) => b.dataset.lang === lang), animate);
+
+    // мягкая смена текста: страница слегка «моргает»
+    if (animate && window.gsap) {
+      const { gsap } = window;
+      gsap.fromTo(
+        'main .hero h1, main .hero p, main .section-head h2, main .section-head p, main .project h3, main .deck-copy h3',
+        { opacity: 0.25, y: 6 },
+        { opacity: 1, y: 0, duration: 0.45, stagger: 0.035, ease: 'power2.out', overwrite: true },
+      );
+    }
+
+    // строки журнала и счётчики обновляются своим кодом
+    window.dispatchEvent(new CustomEvent('lang:change', { detail: lang }));
+  };
+
+  if (langOpts.length && i18n) {
+    langOpts.forEach((b) => {
+      b.addEventListener('click', () => {
+        if (b.classList.contains('is-on')) return;
+        if (window.gsap) {
+          window.gsap.fromTo(b, { scale: 0.94 }, { scale: 1, duration: 0.28, ease: 'back.out(2)' });
+        }
+        setLang(b.dataset.lang, true);
+      });
+    });
+    // стартовая позиция пальца
+    requestAnimationFrame(() => moveThumb(langOpts.find((b) => b.classList.contains('is-on')), false));
+    window.addEventListener('resize', () => moveThumb(langOpts.find((b) => b.classList.contains('is-on')), false));
+  }
+
+})();
+</script>
+
+
+</body>
+</html>
